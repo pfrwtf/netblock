@@ -1,3 +1,4 @@
 # connect.facebook.net
 api-js.datadome.co
 plausible.io
+fonts.googleapis.com
