@@ -1,132 +1,54 @@
-import functools
-import aiohttp
+import json
+from src.requests import rate_limited_request, cloudflare_gateway_request, retry_config, retry
 
-from src import CF_API_TOKEN, CF_IDENTIFIER
+@retry(**retry_config)
+def get_current_lists():
+    status, response = cloudflare_gateway_request("GET", "/lists")
+    return response["result"] or []
 
-def aiohttp_session(func):
-    @functools.wraps(func)
-    async def wrapper(*args, **kwargs):
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=10),
-            headers={"Authorization": f"Bearer {CF_API_TOKEN}"},
-        ) as session:
-            kwargs["session"] = session
-            return await func(*args, **kwargs)
+@retry(**retry_config)
+def get_current_policies():
+    status, response = cloudflare_gateway_request("GET", "/rules")
+    return response["result"] or []
 
-    return wrapper
+@retry(**retry_config)
+def get_list_items(list_id, list_size):
+    status, response = cloudflare_gateway_request("GET", f"/lists/{list_id}/items?limit={list_size}")
+    return response["result"]
 
+@retry(**retry_config)
+@rate_limited_request
+def patch_list(list_id, payload):
+    body = json.dumps(payload)
+    status, response = cloudflare_gateway_request("PATCH", f"/lists/{list_id}", body)
+    return response["result"]
 
-@aiohttp_session
-async def get_lists(name_prefix: str, session: aiohttp.ClientSession):
-    async with session.get(
-        f"https://api.cloudflare.com/client/v4/accounts/{CF_IDENTIFIER}/gateway/lists",
-    ) as resp:
-        if resp.status != 200:
-            raise Exception("Failed to get Cloudflare lists")
+@retry(**retry_config)
+@rate_limited_request
+def create_list(payload):
+    body = json.dumps(payload)
+    status, response = cloudflare_gateway_request("POST", "/lists", body)
+    return response ["result"]
 
-        lists = (await resp.json())["result"] or []
-        return [l for l in lists if l["name"].startswith(name_prefix)]
+@retry(**retry_config)
+def create_policy(json_data):
+    body = json.dumps(json_data)
+    status, response = cloudflare_gateway_request("POST", "/rules", body)
+    return response["result"]
 
+@retry(**retry_config)
+def update_policy(policy_id, json_data):
+    body = json.dumps(json_data)
+    status, response = cloudflare_gateway_request("PUT", f"/rules/{policy_id}", body)
+    return response["result"]
 
-@aiohttp_session
-async def create_list(name: str, domains: list[str], session: aiohttp.ClientSession):
-    async with session.post(
-        f"https://api.cloudflare.com/client/v4/accounts/{CF_IDENTIFIER}/gateway/lists",
-        json={
-            "name": name,
-            "description": "Ads & Tracking Domains",
-            "type": "DOMAIN",
-            "items": [{"value": domain} for domain in domains],
-        },
-    ) as resp:
-        if resp.status != 200:
-            raise Exception("Failed to create Cloudflare list")
+@retry(**retry_config)
+@rate_limited_request
+def delete_list(list_id):
+    status, response = cloudflare_gateway_request("DELETE", f"/lists/{list_id}")
+    return response["result"]
 
-        return (await resp.json())["result"]
-
-
-@aiohttp_session
-async def delete_list(name: str, list_id: str, session: aiohttp.ClientSession):
-    async with session.delete(
-        f"https://api.cloudflare.com/client/v4/accounts/{CF_IDENTIFIER}/gateway/lists/{list_id}",
-    ) as resp:
-        if resp.status != 200:
-            raise Exception("Failed to delete Cloudflare list")
-
-        return (await resp.json())["result"]
-
-
-@aiohttp_session
-async def get_firewall_policies(name_prefix: str, session: aiohttp.ClientSession):
-    async with session.get(
-        f"https://api.cloudflare.com/client/v4/accounts/{CF_IDENTIFIER}/gateway/rules",
-    ) as resp:
-        if resp.status != 200:
-            raise Exception("Failed to get Cloudflare firewall policies")
-
-        policies = (await resp.json())["result"] or []
-        return [l for l in policies if l["name"].startswith(name_prefix)]
-
-
-@aiohttp_session
-async def create_gateway_policy(
-    name: str, list_ids: list[str], session: aiohttp.ClientSession
-):
-    async with session.post(
-        f"https://api.cloudflare.com/client/v4/accounts/{CF_IDENTIFIER}/gateway/rules",
-        json={
-            "name": name,
-            "description": "Block Ads & Tracking",
-            "action": "block",
-            "enabled": True,
-            "filters": ["dns"],
-            "traffic": "or".join(
-                [f"any(dns.domains[*] in ${list_id})" for list_id in list_ids]
-            ),
-            "rule_settings": {
-                "block_page_enabled": False,
-            },
-        },
-    ) as resp:
-        if resp.status != 200:
-            raise Exception("Failed to create Cloudflare firewall policy")
-        return (await resp.json())["result"]
-
-
-@aiohttp_session
-async def update_gateway_policy(
-    name: str, policy_id: str, list_ids: list[str], session: aiohttp.ClientSession
-):
-    async with session.put(
-        f"https://api.cloudflare.com/client/v4/accounts/{CF_IDENTIFIER}/gateway/rules/{policy_id}",
-        json={
-            "name": name,
-            "description": "Block Ads & Tracking",
-            "action": "block",
-            "enabled": True,
-            "filters": ["dns"],
-            "traffic": "or".join(
-                [f"any(dns.domains[*] in ${list_id})" for list_id in list_ids]
-            ),
-            "rule_settings": {
-                "block_page_enabled": False,
-            },
-        },
-    ) as resp:
-        if resp.status != 200:
-            raise Exception("Failed to update Cloudflare firewall policy")
-
-        return (await resp.json())["result"]
-
-
-@aiohttp_session
-async def delete_gateway_policy(
-    policy_id: str, session: aiohttp.ClientSession
-):
-    async with session.delete(
-        f"https://api.cloudflare.com/client/v4/accounts/{CF_IDENTIFIER}/gateway/rules/{policy_id}",
-    ) as resp:
-        if resp.status != 200:
-            raise Exception("Failed to delete Cloudflare gateway firewall policy")
-
-        return (await resp.json())["result"]
+@retry(**retry_config)
+def delete_policy(policy_id):
+    status, response = cloudflare_gateway_request("DELETE", f"/rules/{policy_id}")
+    return response["result"]
